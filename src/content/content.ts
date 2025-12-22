@@ -66,10 +66,16 @@ function setupMessageListener() {
         break
 
       case 'SCAN_PAGE':
-        scanPage().then((results) => {
-          sendResponse({ success: true, results })
-          showScanResults(results)
-        })
+        // Hide any existing overlay panel before scanning
+        hideOverlayPanel()
+        
+        // Small delay to ensure DOM is updated
+        setTimeout(() => {
+          scanPage().then((results) => {
+            sendResponse({ success: true, results })
+            showScanResults(results)
+          })
+        }, 50)
         return true // Keep channel open for async
 
       case 'CHECK_ELEMENT':
@@ -269,6 +275,12 @@ async function scanPage(): Promise<ScanResult[]> {
 
   textElements.forEach((el) => {
     const element = el as HTMLElement
+    
+    // IMPORTANT: Skip elements that are part of the extension's overlay
+    if (isExtensionElement(element)) {
+      return
+    }
+    
     const style = window.getComputedStyle(element)
     
     // Skip hidden elements
@@ -304,7 +316,6 @@ async function scanPage(): Promise<ScanResult[]> {
     const bgColor = parseColor(bgColorStr)
 
     if (!fgColor || !bgColor) {
-      console.log(`Could not parse colors for element:`, element.tagName, fgColorStr, bgColorStr)
       return
     }
 
@@ -313,7 +324,7 @@ async function scanPage(): Promise<ScanResult[]> {
 
     results.push({
       element: element.tagName.toLowerCase(),
-      selector: getSelector(element),
+      selector: getUniqueSelector(element),
       foreground: rgbToHex(fgColor),
       background: rgbToHex(bgColor),
       ratio,
@@ -327,6 +338,26 @@ async function scanPage(): Promise<ScanResult[]> {
   isScanning = false
   console.log(`Scan complete. Found ${results.length} text elements with contrast data.`)
   return results
+}
+
+/**
+ * Check if an element is part of the extension's injected UI
+ */
+function isExtensionElement(element: HTMLElement): boolean {
+  // Check if element or any parent has extension-specific classes
+  let current: HTMLElement | null = element
+  while (current) {
+    if (current.id === 'thewcag-overlay-container' ||
+        current.classList.contains('thewcag-overlay') ||
+        current.classList.contains('thewcag-panel') ||
+        current.classList.contains('thewcag-toast') ||
+        current.classList.contains('thewcag-color-preview') ||
+        current.classList.contains('thewcag-highlight')) {
+      return true
+    }
+    current = current.parentElement
+  }
+  return false
 }
 
 /**
@@ -386,30 +417,61 @@ function getEffectiveBackgroundColor(element: HTMLElement): string {
 }
 
 /**
- * Generate a CSS selector for an element
+ * Generate a unique, human-readable CSS selector for an element
  */
-function getSelector(element: HTMLElement): string {
-  if (element.id) {
-    return `#${element.id}`
+function getUniqueSelector(element: HTMLElement): string {
+  // If element has an ID, use it (most specific)
+  if (element.id && !element.id.includes('thewcag')) {
+    return `#${CSS.escape(element.id)}`
   }
   
+  // Try to build a unique selector
   const path: string[] = []
   let current: HTMLElement | null = element
+  let depth = 0
+  const maxDepth = 4
   
-  while (current && current !== document.body) {
+  while (current && current !== document.body && current !== document.documentElement && depth < maxDepth) {
     let selector = current.tagName.toLowerCase()
     
-    if (current.className) {
-      const classes = current.className.toString().split(' ').filter(c => c).slice(0, 2)
+    // Add ID if available
+    if (current.id && !current.id.includes('thewcag')) {
+      path.unshift(`#${CSS.escape(current.id)}`)
+      break // ID is unique, no need to go further
+    }
+    
+    // Add meaningful classes (skip utility classes)
+    if (current.className && typeof current.className === 'string') {
+      const classes = current.className
+        .split(' ')
+        .filter(c => c && 
+          c.length > 2 && 
+          !c.includes('thewcag') &&
+          !c.match(/^(js-|is-|has-|ng-|v-|_|css-)/) &&
+          !c.match(/^[a-z]{1,2}\d+/) // Skip minified classes like "a1", "b2"
+        )
+        .slice(0, 2)
+      
       if (classes.length) {
-        selector += '.' + classes.join('.')
+        selector += '.' + classes.map(c => CSS.escape(c)).join('.')
+      }
+    }
+    
+    // Add nth-child if needed to make it unique among siblings
+    const parent = current.parentElement
+    if (parent && !current.id) {
+      const siblings = Array.from(parent.children).filter(
+        child => child.tagName === current!.tagName
+      )
+      if (siblings.length > 1) {
+        const index = siblings.indexOf(current) + 1
+        selector += `:nth-of-type(${index})`
       }
     }
     
     path.unshift(selector)
     current = current.parentElement
-    
-    if (path.length >= 3) break
+    depth++
   }
   
   return path.join(' > ')
@@ -449,9 +511,24 @@ function checkElementAtPoint(x: number, y: number) {
 }
 
 /**
+ * Hide/remove any existing overlay panel
+ */
+function hideOverlayPanel() {
+  // Remove any existing scan results panel
+  const existingPanels = document.querySelectorAll('.thewcag-panel')
+  existingPanels.forEach(panel => panel.remove())
+  
+  // Also remove any toasts
+  const existingToasts = document.querySelectorAll('.thewcag-toast')
+  existingToasts.forEach(toast => toast.remove())
+}
+
+/**
  * Show scan results in overlay panel
  */
 function showScanResults(results: ScanResult[]) {
+  // First hide any existing panel
+  hideOverlayPanel()
   const failures = results.filter(r => r.score === 'fail')
   const warnings = results.filter(r => r.score === 'aa-large')
   const passes = results.filter(r => r.score === 'aa' || r.score === 'aaa')
