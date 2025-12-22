@@ -408,7 +408,16 @@ async function scanPage(): Promise<ScanResult[]> {
 
     if (!fgColor || !bgColor) {
       skippedColorParse++
-      console.log('Color parse failed:', { fg: style.color })
+      // Only log first few failures to avoid console spam
+      if (skippedColorParse <= 3) {
+        console.log('Color parse failed:', { 
+          element: element.tagName, 
+          text: text.substring(0, 20),
+          fgInput: style.color, 
+          fgParsed: fg,
+          bgParsed: bg
+        })
+      }
       return
     }
 
@@ -470,9 +479,9 @@ function getDirectTextContent(element: HTMLElement): string {
   const tagName = element.tagName.toLowerCase()
   
   // For headings, buttons, links, labels - always get full text (these own their content)
-  if (['button', 'a', 'label', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'th', 'td', 'li', 'dt', 'dd'].includes(tagName)) {
+  if (['button', 'a', 'label', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'th', 'td', 'li', 'dt', 'dd', 'figcaption', 'caption', 'summary'].includes(tagName)) {
     const text = (element.innerText || element.textContent || '').trim()
-    if (text && text.length <= 300) {
+    if (text && text.length <= 500) {
       return text
     }
   }
@@ -501,25 +510,32 @@ function getDirectTextContent(element: HTMLElement): string {
   }
   
   // For elements with only inline/inline-block children, get the combined text
-  const inlineOnly = Array.from(childElements).every(child => {
-    const display = window.getComputedStyle(child as HTMLElement).display
-    return display === 'inline' || display === 'inline-block' || display === 'inline-flex'
+  const allInline = Array.from(childElements).every(child => {
+    const style = window.getComputedStyle(child as HTMLElement)
+    const display = style.display
+    return display.startsWith('inline') || display === 'contents'
   })
   
-  if (inlineOnly) {
+  if (allInline) {
     const text = (element.innerText || '').trim()
     // Only return if it's reasonably sized (not a huge container)
-    if (text && text.length <= 300) {
+    if (text && text.length <= 500) {
       return text
     }
   }
   
-  // For paragraphs and spans, try innerText as fallback if not too long
-  if (['p', 'span', 'div', 'code', 'pre', 'blockquote'].includes(tagName)) {
+  // For paragraphs, spans, divs, etc. - get innerText if it's short enough
+  if (['p', 'span', 'div', 'code', 'pre', 'blockquote', 'strong', 'em', 'b', 'i', 'small', 'mark', 'time', 'cite', 'q', 'abbr'].includes(tagName)) {
     const text = (element.innerText || '').trim()
-    if (text && text.length <= 300 && text.length > 0) {
+    if (text && text.length <= 500 && text.length > 0) {
       return text
     }
+  }
+  
+  // Last resort: if element has some text content and is small enough, use it
+  const innerText = (element.innerText || '').trim()
+  if (innerText && innerText.length > 0 && innerText.length <= 200) {
+    return innerText
   }
   
   return ''

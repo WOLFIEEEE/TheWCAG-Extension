@@ -52,11 +52,110 @@ export function parseColor(color: string): RGB | null {
   const oklch = parseOklchString(color)
   if (oklch) return oklchToRgb(oklch)
 
+  // Try lab() color space
+  const lab = parseLabString(color)
+  if (lab) return labToRgb(lab)
+
+  // Try lch() color space
+  const lch = parseLchString(color)
+  if (lch) return lchToRgb(lch)
+
   // Try named colors
   const named = parseNamedColor(color)
   if (named) return named
 
   return null
+}
+
+/**
+ * Parse lab(l a b) or lab(l a b / alpha) format
+ */
+function parseLabString(str: string): { l: number; a: number; b: number } | null {
+  const match = str.match(/lab\s*\(\s*([\d.]+)%?\s+([-\d.]+)\s+([-\d.]+)(?:\s*\/\s*[\d.]+%?)?\s*\)/)
+  if (!match) return null
+
+  let l = parseFloat(match[1])
+  if (l > 1 && l <= 100) l = l / 100
+
+  return {
+    l: Math.min(1, Math.max(0, l)),
+    a: parseFloat(match[2]),
+    b: parseFloat(match[3]),
+  }
+}
+
+/**
+ * Parse lch(l c h) or lch(l c h / alpha) format
+ */
+function parseLchString(str: string): { l: number; c: number; h: number } | null {
+  const match = str.match(/lch\s*\(\s*([\d.]+)%?\s+([\d.]+)\s+([\d.]+)(?:deg)?(?:\s*\/\s*[\d.]+%?)?\s*\)/)
+  if (!match) return null
+
+  let l = parseFloat(match[1])
+  if (l > 1 && l <= 100) l = l / 100
+
+  return {
+    l: Math.min(1, Math.max(0, l)),
+    c: parseFloat(match[2]),
+    h: parseFloat(match[3]) % 360,
+  }
+}
+
+/**
+ * Convert LAB to RGB
+ */
+function labToRgb(lab: { l: number; a: number; b: number }): RGB {
+  // LAB to XYZ
+  const l = lab.l * 100
+  const a = lab.a
+  const b = lab.b
+
+  let y = (l + 16) / 116
+  let x = a / 500 + y
+  let z = y - b / 200
+
+  const x3 = x * x * x
+  const y3 = y * y * y
+  const z3 = z * z * z
+
+  x = x3 > 0.008856 ? x3 : (x - 16 / 116) / 7.787
+  y = y3 > 0.008856 ? y3 : (y - 16 / 116) / 7.787
+  z = z3 > 0.008856 ? z3 : (z - 16 / 116) / 7.787
+
+  // D65 reference white
+  x = x * 0.95047
+  y = y * 1.00000
+  z = z * 1.08883
+
+  // XYZ to RGB
+  let r = x * 3.2406 + y * -1.5372 + z * -0.4986
+  let g = x * -0.9689 + y * 1.8758 + z * 0.0415
+  let bVal = x * 0.0557 + y * -0.2040 + z * 1.0570
+
+  // Gamma correction
+  r = r > 0.0031308 ? 1.055 * Math.pow(r, 1 / 2.4) - 0.055 : 12.92 * r
+  g = g > 0.0031308 ? 1.055 * Math.pow(g, 1 / 2.4) - 0.055 : 12.92 * g
+  bVal = bVal > 0.0031308 ? 1.055 * Math.pow(bVal, 1 / 2.4) - 0.055 : 12.92 * bVal
+
+  return {
+    r: Math.min(255, Math.max(0, Math.round(r * 255))),
+    g: Math.min(255, Math.max(0, Math.round(g * 255))),
+    b: Math.min(255, Math.max(0, Math.round(bVal * 255))),
+  }
+}
+
+/**
+ * Convert LCH to RGB (via LAB)
+ */
+function lchToRgb(lch: { l: number; c: number; h: number }): RGB {
+  // LCH to LAB
+  const hRad = (lch.h * Math.PI) / 180
+  const lab = {
+    l: lch.l,
+    a: lch.c * Math.cos(hRad),
+    b: lch.c * Math.sin(hRad),
+  }
+  return labToRgb(lab)
 }
 
 /**
@@ -130,15 +229,16 @@ export function parseHex(hex: string): RGB | null {
  * Parse RGB/RGBA string - handles both legacy and modern CSS syntax
  * Legacy: rgb(255, 128, 0) or rgba(255, 128, 0, 0.5)
  * Modern: rgb(255 128 0) or rgb(255 128 0 / 0.5)
+ * Also handles floats: rgb(127.5, 128.3, 0)
  */
 export function parseRgbString(str: string): RGB | null {
-  // Try legacy comma-separated format first
-  const legacyMatch = str.match(/rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)/)
+  // Try legacy comma-separated format first (handles both ints and floats)
+  const legacyMatch = str.match(/rgba?\s*\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*[\d.]+)?\s*\)/)
   if (legacyMatch) {
     return {
-      r: Math.min(255, Math.max(0, parseInt(legacyMatch[1]))),
-      g: Math.min(255, Math.max(0, parseInt(legacyMatch[2]))),
-      b: Math.min(255, Math.max(0, parseInt(legacyMatch[3]))),
+      r: Math.min(255, Math.max(0, Math.round(parseFloat(legacyMatch[1])))),
+      g: Math.min(255, Math.max(0, Math.round(parseFloat(legacyMatch[2])))),
+      b: Math.min(255, Math.max(0, Math.round(parseFloat(legacyMatch[3])))),
     }
   }
 
