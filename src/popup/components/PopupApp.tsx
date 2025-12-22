@@ -184,6 +184,63 @@ export function PopupApp() {
     setActiveTab('checker')
   }, [updateColors])
 
+  // Ensure content script is loaded, inject if needed
+  const ensureContentScriptLoaded = useCallback(async (tabId: number): Promise<boolean> => {
+    // First, try to ping the content script to see if it's already loaded
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' })
+      if (response?.success === true) {
+        return true
+      }
+    } catch {
+      // Content script not loaded - this is expected for pages opened before extension install
+      console.log('Content script not responding, will attempt injection...')
+    }
+    
+    // Content script not loaded, try programmatic injection
+    try {
+      // Get the content script files from the manifest
+      const manifest = chrome.runtime.getManifest()
+      const contentScriptConfig = manifest.content_scripts?.[0]
+      
+      if (!contentScriptConfig) {
+        console.error('No content script configuration found in manifest')
+        return false
+      }
+      
+      // Inject JavaScript files
+      if (contentScriptConfig.js && contentScriptConfig.js.length > 0) {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: contentScriptConfig.js
+        })
+      }
+      
+      // Inject CSS files
+      if (contentScriptConfig.css && contentScriptConfig.css.length > 0) {
+        await chrome.scripting.insertCSS({
+          target: { tabId },
+          files: contentScriptConfig.css
+        })
+      }
+      
+      // Wait for script to initialize
+      await new Promise(resolve => setTimeout(resolve, 150))
+      
+      // Verify injection worked
+      try {
+        const verifyResponse = await chrome.tabs.sendMessage(tabId, { type: 'PING' })
+        return verifyResponse?.success === true
+      } catch {
+        console.error('Content script injected but not responding')
+        return false
+      }
+    } catch (injectError) {
+      console.error('Failed to inject content script:', injectError)
+      return false
+    }
+  }, [])
+
   // Open eyedropper (sends message to content script)
   const handleEyedropper = useCallback(async (type: 'foreground' | 'background') => {
     try {
@@ -203,19 +260,31 @@ export function PopupApp() {
         return
       }
       
+      // Ensure content script is loaded before sending message
+      const isLoaded = await ensureContentScriptLoaded(tab.id)
+      if (!isLoaded) {
+        setError({ 
+          title: 'Content Script Error',
+          message: 'Could not initialize the color picker on this page. Try refreshing the page and reopening the extension.' 
+        })
+        return
+      }
+      
       // Store the active eyedropper state so we know which color to update
       await setEyedropperActive(type)
       
+      // Send message to content script - now we know it's loaded
       chrome.tabs.sendMessage(tab.id, { 
         type: 'OPEN_EYEDROPPER', 
         colorType: type 
       })
+      
       window.close() // Close popup to allow interaction with page
     } catch (err) {
       console.error('Error opening eyedropper:', err)
       setError({ message: 'Failed to open color picker. Try refreshing the page.' })
     }
-  }, [])
+  }, [ensureContentScriptLoaded])
 
   // Scan page
   const handleScanPage = useCallback(async () => {
@@ -236,13 +305,23 @@ export function PopupApp() {
         return
       }
       
+      // Ensure content script is loaded before sending message
+      const isLoaded = await ensureContentScriptLoaded(tab.id)
+      if (!isLoaded) {
+        setError({ 
+          title: 'Content Script Error',
+          message: 'Could not initialize the page scanner. Try refreshing the page and reopening the extension.' 
+        })
+        return
+      }
+      
       chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' })
       window.close()
     } catch (err) {
       console.error('Error scanning page:', err)
       setError({ message: 'Failed to scan page. Try refreshing the page.' })
     }
-  }, [])
+  }, [ensureContentScriptLoaded])
 
   return (
     <div className="w-[380px] min-h-[500px] bg-cream dark:bg-dark">
