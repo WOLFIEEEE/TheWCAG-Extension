@@ -9,7 +9,8 @@ import {
   getPendingEyedropper,
   clearPendingEyedropper,
   setEyedropperActive,
-  onStorageChange
+  saveCurrentColors,
+  getCurrentColors
 } from '@/lib/storage'
 import { isRestrictedUrl, getRestrictedPageMessage, getRestrictedPageTitle } from '@/lib/content-script-helper'
 import { ColorInput } from './ColorInput'
@@ -113,50 +114,56 @@ export function PopupApp() {
     getColorHistory().then(setHistory)
   }, [])
 
-  // Check for pending eyedropper color on mount
+  // Load saved colors and pending eyedropper on mount
   useEffect(() => {
-    const checkPendingEyedropper = async () => {
+    const initializeColors = async () => {
+      // First, restore previously saved colors
+      const savedColors = await getCurrentColors()
+      let currentFg = foregroundRgb
+      let currentBg = backgroundRgb
+      
+      if (savedColors) {
+        const fgRgb = parseColor(savedColors.foregroundHex)
+        const bgRgb = parseColor(savedColors.backgroundHex)
+        if (fgRgb && bgRgb) {
+          currentFg = fgRgb
+          currentBg = bgRgb
+          setForegroundRgb(fgRgb)
+          setBackgroundRgb(bgRgb)
+          setForegroundHex(savedColors.foregroundHex)
+          setBackgroundHex(savedColors.backgroundHex)
+        }
+      }
+      
+      // Then, check for pending eyedropper color and apply it
       const pending = await getPendingEyedropper()
       if (pending) {
         const rgb = parseColor(pending.color)
         if (rgb) {
+          // Use the restored colors (or defaults if none saved)
           if (pending.colorType === 'foreground') {
-            updateColors(rgb, backgroundRgb)
+            updateColors(rgb, currentBg)
           } else {
-            updateColors(foregroundRgb, rgb)
+            updateColors(currentFg, rgb)
           }
         }
         // Clear the pending state after applying
         await clearPendingEyedropper()
         // Clear the badge
         chrome.action.setBadgeText({ text: '' })
+      } else if (savedColors) {
+        // No pending eyedropper, just update with saved colors
+        updateColors(currentFg, currentBg)
       }
     }
     
-    checkPendingEyedropper()
-  }, []) // Only run on mount
+    initializeColors()
+  }, []) // Only run on mount - we handle state internally
 
-  // Listen for storage changes (for real-time eyedropper updates)
+  // Save colors to storage whenever they change
   useEffect(() => {
-    const cleanup = onStorageChange((changes) => {
-      if (changes.wcag_pending_eyedropper?.newValue) {
-        const pending = changes.wcag_pending_eyedropper.newValue
-        const rgb = parseColor(pending.color)
-        if (rgb) {
-          if (pending.colorType === 'foreground') {
-            updateColors(rgb, backgroundRgb)
-          } else {
-            updateColors(foregroundRgb, rgb)
-          }
-        }
-        // Clear the pending state after applying
-        clearPendingEyedropper()
-        chrome.action.setBadgeText({ text: '' })
-      }
-    })
-    
-    return cleanup
-  }, [foregroundRgb, backgroundRgb, updateColors])
+    saveCurrentColors(foregroundHex, backgroundHex)
+  }, [foregroundHex, backgroundHex])
 
   // Recalculate when target level or text size changes
   useEffect(() => {

@@ -43,7 +43,51 @@ const STORAGE_KEYS = {
   SAVED_PALETTES: 'wcag_saved_palettes',
   PREFERENCES: 'wcag_preferences',
   PENDING_EYEDROPPER: 'wcag_pending_eyedropper',
+  CURRENT_COLORS: 'wcag_current_colors',
 } as const
+
+/**
+ * Current colors state - persisted so popup can restore on reopen
+ */
+export interface CurrentColors {
+  foregroundHex: string
+  backgroundHex: string
+  timestamp: number
+}
+
+/**
+ * Save current colors to storage (called before popup closes)
+ */
+export async function saveCurrentColors(
+  foregroundHex: string,
+  backgroundHex: string
+): Promise<void> {
+  try {
+    const current: CurrentColors = {
+      foregroundHex,
+      backgroundHex,
+      timestamp: Date.now(),
+    }
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.CURRENT_COLORS]: current,
+    })
+  } catch (error) {
+    console.error('Error saving current colors:', error)
+  }
+}
+
+/**
+ * Get saved current colors
+ */
+export async function getCurrentColors(): Promise<CurrentColors | null> {
+  try {
+    const result = await chrome.storage.local.get(STORAGE_KEYS.CURRENT_COLORS)
+    return result[STORAGE_KEYS.CURRENT_COLORS] || null
+  } catch (error) {
+    console.error('Error getting current colors:', error)
+    return null
+  }
+}
 
 /**
  * Pending eyedropper state - stored when user picks a color
