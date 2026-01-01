@@ -5,7 +5,7 @@ import manifest from './manifest.json'
 import { resolve } from 'path'
 import { copyFileSync, mkdirSync, existsSync } from 'fs'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     crx({ manifest }),
@@ -34,13 +34,30 @@ export default defineConfig({
   // Use empty base for Chrome extension compatibility
   base: '',
   build: {
+    // Enable minification in production (esbuild is faster and built-in)
+    minify: mode === 'production' ? 'esbuild' : false,
+    // Generate source maps for debugging
+    sourcemap: mode === 'production' ? 'hidden' : true,
+    // Optimize chunk size
+    chunkSizeWarningLimit: 500,
     rollupOptions: {
       input: {
         popup: resolve(__dirname, 'src/popup/index.html'),
         devtools: resolve(__dirname, 'src/devtools/devtools.html'),
         panel: resolve(__dirname, 'src/devtools/panel.html'),
       },
+      output: {
+        // Optimize chunking
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          validation: ['zod'],
+        },
+      },
     },
   },
-})
+  // Define environment variables
+  define: {
+    __DEV__: mode !== 'production',
+  },
+}))
 

@@ -2,7 +2,10 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { DevToolsPanel } from './components/DevToolsPanel'
 import { ErrorBoundary } from '../popup/components/ErrorBoundary'
+import { createLogger } from '../lib/logger'
 import '../styles/globals.css'
+
+const logger = createLogger('DevToolsPanel');
 
 const container = document.getElementById('root')
 if (container) {
@@ -15,7 +18,9 @@ if (container) {
     </React.StrictMode>
   )
 } else {
-  console.error('DevTools panel: Root element not found')
+  logger.error('DevTools panel: Root element not found');
   document.body.innerHTML = '<div style="padding: 20px; color: red;">Error: Root element not found in DevTools panel</div>'
 }
+
+
 
