@@ -1,469 +1,405 @@
-import { useState, useEffect, useCallback } from 'react'
-import { RGB, parseColor, rgbToHex } from '@/lib/color-utils'
-import { analyzeContrast, ContrastResult } from '@/lib/contrast'
-import { getSuggestions, SuggestionResult } from '@/lib/suggestions'
-import { 
-  addToHistory, 
-  getColorHistory, 
-  ColorPair,
-  getPendingEyedropper,
-  clearPendingEyedropper,
-  setEyedropperActive,
-  saveCurrentColors,
-  getCurrentColors
-} from '@/lib/storage'
-import { isRestrictedUrl, getRestrictedPageMessage, getRestrictedPageTitle } from '@/lib/content-script-helper'
-import { ColorInput } from './ColorInput'
-import { ContrastDisplay } from './ContrastDisplay'
-import { SuggestionsList } from './SuggestionsList'
-import { ColorHistory } from './ColorHistory'
-import { Header } from './Header'
-import { Tabs } from './Tabs'
-import { Settings } from './Settings'
-import { ToastContainer, useToast } from './Toast'
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Header } from './Header';
+import { Tabs, TabId } from './Tabs';
+import { FilterSelector } from './FilterSelector';
+import { FilterToggle } from './FilterToggle';
+import { SeveritySlider } from './SeveritySlider';
+import { FilterInfo } from './FilterInfo';
+import { Settings } from './Settings';
+import { Toast } from './Toast';
+import { ErrorBoundary } from './ErrorBoundary';
+import type { ColorBlindnessType, FilterConfig } from '../../lib/colorblind-filters';
+import { getDefaultSeverity, isAnomalyType, isValidType, sanitizeSeverity } from '../../lib/colorblind-filters';
+import type { ColorBlindPreferences } from '../../lib/storage';
+import {
+  getPreferences,
+  updatePreferences,
+  getCurrentFilter,
+  setCurrentFilter,
+  getIsEnabled,
+  setIsEnabled,
+  exportData,
+  importData,
+  clearHistory,
+  resetToDefaults
+} from '../../lib/storage';
+import { createLogger } from '../../lib/logger';
+import { MAX_IMPORT_FILE_SIZE, isValidImportFileSize } from '../../lib/validation';
+import { debounce } from '../../lib/debounce';
+import { isRestrictedPage, getUserMessage } from '../../lib/errors';
 
-type TabId = 'checker' | 'history' | 'settings'
+const logger = createLogger('PopupApp');
 
-export function PopupApp() {
-  const [foregroundHex, setForegroundHex] = useState('#1F1F1E')
-  const [backgroundHex, setBackgroundHex] = useState('#FFFDF9')
-  const [foregroundRgb, setForegroundRgb] = useState<RGB>({ r: 31, g: 31, b: 30 })
-  const [backgroundRgb, setBackgroundRgb] = useState<RGB>({ r: 255, g: 253, b: 249 })
-  const [contrastResult, setContrastResult] = useState<ContrastResult | null>(null)
-  const [suggestions, setSuggestions] = useState<SuggestionResult | null>(null)
-  const [history, setHistory] = useState<ColorPair[]>([])
-  const [activeTab, setActiveTab] = useState<TabId>('checker')
-  const [targetLevel, setTargetLevel] = useState<'AA' | 'AAA'>('AA')
-  const [textSize, setTextSize] = useState<'normal' | 'large'>('normal')
-  const [error, setError] = useState<{ title?: string; message: string } | null>(null)
-  const { toasts, dismissToast, showSuccess, showError } = useToast()
+// Debounce delay for severity changes (ms)
+const SEVERITY_DEBOUNCE_DELAY = 150;
 
-  // Handle copy feedback
-  const handleCopy = useCallback((success: boolean) => {
-    if (success) {
-      showSuccess('Color copied!')
-    } else {
-      showError('Failed to copy')
-    }
-  }, [showSuccess, showError])
-
-  // Clear error after 5 seconds
-  useEffect(() => {
-    if (error) {
-      const timer = setTimeout(() => setError(null), 5000)
-      return () => clearTimeout(timer)
-    }
-  }, [error])
-
-  // Update colors and calculate contrast
-  const updateColors = useCallback((fg: RGB, bg: RGB) => {
-    setForegroundRgb(fg)
-    setBackgroundRgb(bg)
-    setForegroundHex(rgbToHex(fg))
-    setBackgroundHex(rgbToHex(bg))
-
-    const result = analyzeContrast(fg, bg)
-    setContrastResult(result)
-
-    // Get suggestions if contrast fails
-    if (result.score === 'fail' || result.score === 'aa-large') {
-      const suggestionResult = getSuggestions(fg, bg, targetLevel, textSize)
-      setSuggestions(suggestionResult)
-    } else {
-      setSuggestions(null)
-    }
-
-    // Add to history
-    addToHistory(fg, bg, result.ratio)
-  }, [targetLevel, textSize])
-
-  // Handle foreground color change
-  const handleForegroundChange = useCallback((colorString: string) => {
-    setForegroundHex(colorString)
-    const rgb = parseColor(colorString)
-    if (rgb) {
-      updateColors(rgb, backgroundRgb)
-    }
-  }, [backgroundRgb, updateColors])
-
-  // Handle background color change
-  const handleBackgroundChange = useCallback((colorString: string) => {
-    setBackgroundHex(colorString)
-    const rgb = parseColor(colorString)
-    if (rgb) {
-      updateColors(foregroundRgb, rgb)
-    }
-  }, [foregroundRgb, updateColors])
-
-  // Swap colors
-  const handleSwapColors = useCallback(() => {
-    updateColors(backgroundRgb, foregroundRgb)
-  }, [foregroundRgb, backgroundRgb, updateColors])
-
-  // Apply suggestion
-  const handleApplySuggestion = useCallback((type: 'foreground' | 'background', rgb: RGB) => {
-    if (type === 'foreground') {
-      updateColors(rgb, backgroundRgb)
-    } else {
-      updateColors(foregroundRgb, rgb)
-    }
-  }, [foregroundRgb, backgroundRgb, updateColors])
-
-  // Load history on mount
-  useEffect(() => {
-    getColorHistory().then(setHistory)
-  }, [])
-
-  // Load saved colors and pending eyedropper on mount
-  useEffect(() => {
-    const initializeColors = async () => {
-      // First, restore previously saved colors
-      const savedColors = await getCurrentColors()
-      let currentFg = foregroundRgb
-      let currentBg = backgroundRgb
-      
-      if (savedColors) {
-        const fgRgb = parseColor(savedColors.foregroundHex)
-        const bgRgb = parseColor(savedColors.backgroundHex)
-        if (fgRgb && bgRgb) {
-          currentFg = fgRgb
-          currentBg = bgRgb
-          setForegroundRgb(fgRgb)
-          setBackgroundRgb(bgRgb)
-          setForegroundHex(savedColors.foregroundHex)
-          setBackgroundHex(savedColors.backgroundHex)
-        }
-      }
-      
-      // Then, check for pending eyedropper color and apply it
-      const pending = await getPendingEyedropper()
-      if (pending) {
-        const rgb = parseColor(pending.color)
-        if (rgb) {
-          // Use the restored colors (or defaults if none saved)
-          if (pending.colorType === 'foreground') {
-            updateColors(rgb, currentBg)
-          } else {
-            updateColors(currentFg, rgb)
-          }
-        }
-        // Clear the pending state after applying
-        await clearPendingEyedropper()
-        // Clear the badge
-        chrome.action.setBadgeText({ text: '' })
-      } else if (savedColors) {
-        // No pending eyedropper, just update with saved colors
-        updateColors(currentFg, currentBg)
-      }
-    }
-    
-    initializeColors()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // Intentionally empty - run only on mount to restore saved state, not on every color change
-
-  // Save colors to storage whenever they change
-  useEffect(() => {
-    saveCurrentColors(foregroundHex, backgroundHex)
-  }, [foregroundHex, backgroundHex])
-
-  // Recalculate when target level or text size changes
-  useEffect(() => {
-    if (foregroundRgb && backgroundRgb) {
-      const result = analyzeContrast(foregroundRgb, backgroundRgb)
-      setContrastResult(result)
-
-      if (result.score === 'fail' || result.score === 'aa-large') {
-        const suggestionResult = getSuggestions(foregroundRgb, backgroundRgb, targetLevel, textSize)
-        setSuggestions(suggestionResult)
-      } else {
-        setSuggestions(null)
-      }
-    }
-  }, [targetLevel, textSize, foregroundRgb, backgroundRgb])
-
-  // Initial calculation on mount
-  useEffect(() => {
-    updateColors(foregroundRgb, backgroundRgb)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // Intentionally empty - only calculate once on mount, state changes handled by updateColors callback
-
-  // Handle history item click
-  const handleHistorySelect = useCallback((pair: ColorPair) => {
-    updateColors(pair.foreground, pair.background)
-    setActiveTab('checker')
-  }, [updateColors])
-
-  // Ensure content script is loaded, inject if needed
-  const ensureContentScriptLoaded = useCallback(async (tabId: number): Promise<boolean> => {
-    // First, try to ping the content script to see if it's already loaded
-    try {
-      const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' })
-      if (response?.success === true) {
-        return true
-      }
-    } catch {
-      // Content script not loaded - this is expected for pages opened before extension install
-      console.log('Content script not responding, will attempt injection...')
-    }
-    
-    // Content script not loaded, try programmatic injection
-    try {
-      // Get the content script files from the manifest
-      const manifest = chrome.runtime.getManifest()
-      const contentScriptConfig = manifest.content_scripts?.[0]
-      
-      if (!contentScriptConfig) {
-        console.error('No content script configuration found in manifest')
-        return false
-      }
-      
-      // Inject JavaScript files
-      if (contentScriptConfig.js && contentScriptConfig.js.length > 0) {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          files: contentScriptConfig.js
-        })
-      }
-      
-      // Inject CSS files
-      if (contentScriptConfig.css && contentScriptConfig.css.length > 0) {
-        await chrome.scripting.insertCSS({
-          target: { tabId },
-          files: contentScriptConfig.css
-        })
-      }
-      
-      // Wait for script to initialize
-      await new Promise(resolve => setTimeout(resolve, 150))
-      
-      // Verify injection worked
-      try {
-        const verifyResponse = await chrome.tabs.sendMessage(tabId, { type: 'PING' })
-        return verifyResponse?.success === true
-      } catch {
-        console.error('Content script injected but not responding')
-        return false
-      }
-    } catch (injectError) {
-      console.error('Failed to inject content script:', injectError)
-      return false
-    }
-  }, [])
-
-  // Open eyedropper (sends message to content script)
-  const handleEyedropper = useCallback(async (type: 'foreground' | 'background') => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-      
-      if (!tab?.id || !tab.url) {
-        setError({ message: 'No active tab found. Please open a webpage first.' })
-        return
-      }
-      
-      // Check if this is a restricted page
-      if (isRestrictedUrl(tab.url)) {
-        setError({
-          title: getRestrictedPageTitle(tab.url),
-          message: getRestrictedPageMessage(tab.url)
-        })
-        return
-      }
-      
-      // Ensure content script is loaded before sending message
-      const isLoaded = await ensureContentScriptLoaded(tab.id)
-      if (!isLoaded) {
-        setError({ 
-          title: 'Content Script Error',
-          message: 'Could not initialize the color picker on this page. Try refreshing the page and reopening the extension.' 
-        })
-        return
-      }
-      
-      // Store the active eyedropper state so we know which color to update
-      await setEyedropperActive(type)
-      
-      // Send message to content script - now we know it's loaded
-      chrome.tabs.sendMessage(tab.id, { 
-        type: 'OPEN_EYEDROPPER', 
-        colorType: type 
-      })
-      
-      window.close() // Close popup to allow interaction with page
-    } catch (err) {
-      console.error('Error opening eyedropper:', err)
-      setError({ message: 'Failed to open color picker. Try refreshing the page.' })
-    }
-  }, [ensureContentScriptLoaded])
-
-  // Scan page
-  const handleScanPage = useCallback(async () => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-      
-      if (!tab?.id || !tab.url) {
-        setError({ message: 'No active tab found. Please open a webpage first.' })
-        return
-      }
-      
-      // Check if this is a restricted page
-      if (isRestrictedUrl(tab.url)) {
-        setError({
-          title: getRestrictedPageTitle(tab.url),
-          message: getRestrictedPageMessage(tab.url)
-        })
-        return
-      }
-      
-      // Ensure content script is loaded before sending message
-      const isLoaded = await ensureContentScriptLoaded(tab.id)
-      if (!isLoaded) {
-        setError({ 
-          title: 'Content Script Error',
-          message: 'Could not initialize the page scanner. Try refreshing the page and reopening the extension.' 
-        })
-        return
-      }
-      
-      chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' })
-      window.close()
-    } catch (err) {
-      console.error('Error scanning page:', err)
-      setError({ message: 'Failed to scan page. Try refreshing the page.' })
-    }
-  }, [ensureContentScriptLoaded])
-
-  return (
-    <div className="w-[380px] min-h-[500px] bg-cream dark:bg-dark">
-      <Header onScanPage={handleScanPage} />
-      
-      <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
-
-      {/* Error Message */}
-      {error && (
-        <div className="mx-4 mt-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg">
-          <div className="flex items-start gap-2">
-            <svg className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            <div className="flex-1">
-              {error.title && (
-                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">
-                  {error.title}
-                </p>
-              )}
-              <p className="text-sm text-amber-700 dark:text-amber-300/90">{error.message}</p>
-              <p className="text-xs text-amber-600 dark:text-amber-400/70 mt-2">
-                💡 Tip: You can still enter colors manually using the color inputs above!
-              </p>
-            </div>
-            <button
-              onClick={() => setError(null)}
-              className="text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 shrink-0"
-              aria-label="Dismiss"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="p-4">
-        {activeTab === 'checker' && (
-          <div className="space-y-4">
-            {/* Color Inputs */}
-            <div className="grid grid-cols-2 gap-3">
-              <ColorInput
-                label="Foreground"
-                value={foregroundHex}
-                onChange={handleForegroundChange}
-                onEyedropper={() => handleEyedropper('foreground')}
-                previewColor={foregroundHex}
-                onCopy={handleCopy}
-              />
-              <ColorInput
-                label="Background"
-                value={backgroundHex}
-                onChange={handleBackgroundChange}
-                onEyedropper={() => handleEyedropper('background')}
-                previewColor={backgroundHex}
-                onCopy={handleCopy}
-              />
-            </div>
-
-            {/* Swap Button */}
-            <button
-              onClick={handleSwapColors}
-              className="w-full btn-ghost text-sm flex items-center justify-center gap-2"
-              aria-label="Swap foreground and background colors"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-              </svg>
-              Swap Colors
-            </button>
-
-            {/* Level & Size Selection */}
-            <div className="flex gap-2">
-              <select
-                value={targetLevel}
-                onChange={(e) => setTargetLevel(e.target.value as 'AA' | 'AAA')}
-                className="input flex-1 text-sm"
-                aria-label="WCAG Level"
-              >
-                <option value="AA">WCAG AA</option>
-                <option value="AAA">WCAG AAA</option>
-              </select>
-              <select
-                value={textSize}
-                onChange={(e) => setTextSize(e.target.value as 'normal' | 'large')}
-                className="input flex-1 text-sm"
-                aria-label="Text Size"
-              >
-                <option value="normal">Normal Text</option>
-                <option value="large">Large Text</option>
-              </select>
-            </div>
-
-            {/* Contrast Result */}
-            {contrastResult && (
-              <ContrastDisplay 
-                result={contrastResult} 
-                foregroundHex={foregroundHex}
-                backgroundHex={backgroundHex}
-                targetLevel={targetLevel}
-                textSize={textSize}
-              />
-            )}
-
-            {/* Suggestions */}
-            {suggestions && (suggestions.bestForeground || suggestions.bestBackground) && (
-              <SuggestionsList
-                suggestions={suggestions}
-                onApply={handleApplySuggestion}
-                targetLevel={targetLevel}
-              />
-            )}
-          </div>
-        )}
-
-        {activeTab === 'history' && (
-          <ColorHistory
-            history={history}
-            onSelect={handleHistorySelect}
-            onRefresh={() => getColorHistory().then(setHistory)}
-          />
-        )}
-
-        {activeTab === 'settings' && (
-          <Settings />
-        )}
-      </div>
-
-      {/* Toast notifications */}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-    </div>
-  )
+interface ToastState {
+  message: string;
+  type: 'success' | 'error' | 'info';
+  visible: boolean;
 }
 
+export function PopupApp() {
+  // State
+  const [activeTab, setActiveTab] = useState<TabId>('simulator');
+  const [filterType, setFilterType] = useState<ColorBlindnessType>('deuteranopia');
+  const [severity, setSeverity] = useState(100);
+  const [isEnabled, setIsEnabledState] = useState(false);
+  const [preferences, setPreferences] = useState<ColorBlindPreferences>({
+    defaultFilter: 'deuteranopia',
+    defaultSeverity: 100,
+    autoApplyOnLoad: false,
+    showInfoToasts: true,
+    darkMode: false,
+    rememberPerSite: false
+  });
+  const [toast, setToast] = useState<ToastState>({ 
+    message: '', 
+    type: 'info', 
+    visible: false 
+  });
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Show toast notification
+  const showToast = useCallback((message: string, type: ToastState['type'] = 'info') => {
+    if (!preferences.showInfoToasts && type === 'info') return;
+    setToast({ message, type, visible: true });
+    setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+  }, [preferences.showInfoToasts]);
+
+  // Load initial state
+  useEffect(() => {
+    const loadState = async () => {
+      try {
+        const [prefs, currentFilter, enabled] = await Promise.all([
+          getPreferences(),
+          getCurrentFilter(),
+          getIsEnabled()
+        ]);
+        
+        setPreferences(prefs);
+        setFilterType(currentFilter.type || prefs.defaultFilter);
+        setSeverity(currentFilter.severity ?? prefs.defaultSeverity);
+        setIsEnabledState(enabled);
+        
+        // Apply dark mode
+        if (prefs.darkMode) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (error) {
+        logger.error('Error loading state:', error);
+        showToast('Error loading settings', 'error');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    loadState();
+  }, [showToast]);
+
+  // Apply filter to page
+  const applyFilter = useCallback(async (config: FilterConfig, enabled: boolean) => {
+    try {
+      // Get active tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      if (!tab?.id) {
+        showToast('No active tab found', 'error');
+        return;
+      }
+      
+      // Check for restricted pages
+      if (tab.url) {
+        const restricted = isRestrictedPage(tab.url);
+        if (restricted.restricted) {
+          showToast('Cannot apply filters on this page', 'error');
+          return;
+        }
+      }
+      
+      // Send message to background
+      await chrome.runtime.sendMessage({
+        action: 'setFilter',
+        config,
+        enabled
+      });
+      
+      // Update local state
+      await setCurrentFilter(config);
+      await setIsEnabled(enabled);
+      
+    } catch (error) {
+      logger.error('Error applying filter:', error);
+      const message = getUserMessage(error);
+      showToast(message, 'error');
+    }
+  }, [showToast]);
+
+  // Handle filter type change with validation
+  const handleFilterChange = useCallback(async (type: ColorBlindnessType) => {
+    // Validate filter type
+    if (!isValidType(type)) {
+      logger.warn('Invalid filter type received:', type);
+      return;
+    }
+    
+    setFilterType(type);
+    
+    // Get appropriate severity for this type
+    const newSeverity = isAnomalyType(type) ? severity : getDefaultSeverity(type);
+    setSeverity(sanitizeSeverity(newSeverity));
+    
+    const config: FilterConfig = { type, severity: newSeverity };
+    
+    // Auto-apply if enabled
+    if (isEnabled && type !== 'normal') {
+      await applyFilter(config, true);
+      showToast(`Applied ${type} simulation`, 'success');
+    } else if (type === 'normal' && isEnabled) {
+      await applyFilter(config, false);
+      setIsEnabledState(false);
+      showToast('Simulation disabled', 'info');
+    }
+  }, [severity, isEnabled, applyFilter, showToast]);
+
+  // Handle toggle with validation
+  const handleToggle = useCallback(async () => {
+    if (!isValidType(filterType) || filterType === 'normal') {
+      showToast('Select a filter type first', 'info');
+      return;
+    }
+    
+    const newEnabled = !isEnabled;
+    setIsEnabledState(newEnabled);
+    
+    const config: FilterConfig = { type: filterType, severity: sanitizeSeverity(severity) };
+    await applyFilter(config, newEnabled);
+    
+    showToast(
+      newEnabled ? `${filterType} simulation enabled` : 'Simulation disabled',
+      'success'
+    );
+  }, [filterType, severity, isEnabled, applyFilter, showToast]);
+
+  // Create debounced filter application
+  const debouncedApplyFilter = useMemo(() => {
+    return debounce(async (config: FilterConfig) => {
+      await applyFilter(config, true);
+    }, SEVERITY_DEBOUNCE_DELAY);
+  }, [applyFilter]);
+
+  // Handle severity change with validation and debouncing
+  const handleSeverityChange = useCallback((newSeverity: number) => {
+    const sanitized = sanitizeSeverity(newSeverity);
+    setSeverity(sanitized);
+    
+    if (isEnabled && isValidType(filterType)) {
+      const config: FilterConfig = { type: filterType, severity: sanitized };
+      debouncedApplyFilter(config);
+    }
+  }, [filterType, isEnabled, debouncedApplyFilter]);
+
+  // Handle dark mode toggle
+  const handleToggleDarkMode = useCallback(async () => {
+    const newDarkMode = !preferences.darkMode;
+    document.documentElement.classList.toggle('dark', newDarkMode);
+    
+    setPreferences(prev => ({ ...prev, darkMode: newDarkMode }));
+    await updatePreferences({ darkMode: newDarkMode });
+  }, [preferences.darkMode]);
+
+  // Handle preferences update
+  const handleUpdatePreferences = useCallback(async (updates: Partial<ColorBlindPreferences>) => {
+    try {
+      setPreferences(prev => ({ ...prev, ...updates }));
+      await updatePreferences(updates);
+      showToast('Settings updated', 'success');
+    } catch (error) {
+      logger.error('Error updating preferences:', error);
+      showToast('Error updating settings', 'error');
+    }
+  }, [showToast]);
+
+  // Handle export
+  const handleExport = useCallback(async () => {
+    try {
+      const data = await exportData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'colorblind-simulator-data.json';
+      a.click();
+      
+      URL.revokeObjectURL(url);
+      showToast('Data exported successfully', 'success');
+    } catch (error) {
+      logger.error('Error exporting data:', error);
+      showToast('Error exporting data', 'error');
+    }
+  }, [showToast]);
+
+  // Handle import with validation
+  const handleImport = useCallback(async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = async (e) => {
+      try {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (!file) return;
+        
+        // Validate file size
+        if (!isValidImportFileSize(file.size)) {
+          const maxSizeMB = (MAX_IMPORT_FILE_SIZE / (1024 * 1024)).toFixed(1);
+          showToast(`File too large. Maximum size is ${maxSizeMB}MB`, 'error');
+          return;
+        }
+        
+        const text = await file.text();
+        
+        // Parse and validate JSON
+        let data: unknown;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          showToast('Invalid JSON file format', 'error');
+          return;
+        }
+        
+        // Import with validation (throws if invalid)
+        await importData(data);
+        
+        // Reload state
+        const prefs = await getPreferences();
+        setPreferences(prefs);
+        
+        const currentFilter = await getCurrentFilter();
+        setFilterType(currentFilter.type || prefs.defaultFilter);
+        setSeverity(currentFilter.severity ?? prefs.defaultSeverity);
+        
+        showToast('Data imported successfully', 'success');
+      } catch (error) {
+        logger.error('Error importing data:', error);
+        const message = error instanceof Error ? error.message : 'Error importing data';
+        showToast(message, 'error');
+      }
+    };
+    
+    input.click();
+  }, [showToast]);
+
+  // Handle clear history
+  const handleClearHistory = useCallback(async () => {
+    try {
+      await clearHistory();
+      showToast('History cleared', 'success');
+    } catch (error) {
+      logger.error('Error clearing history:', error);
+      showToast('Error clearing history', 'error');
+    }
+  }, [showToast]);
+
+  // Handle reset defaults
+  const handleResetDefaults = useCallback(async () => {
+    try {
+      await resetToDefaults();
+      
+      // Reload defaults
+      const prefs = await getPreferences();
+      setPreferences(prefs);
+      setFilterType(prefs.defaultFilter);
+      setSeverity(prefs.defaultSeverity);
+      setIsEnabledState(false);
+      
+      showToast('Settings reset to defaults', 'success');
+    } catch (error) {
+      logger.error('Error resetting defaults:', error);
+      showToast('Error resetting settings', 'error');
+    }
+  }, [showToast]);
+
+  if (isLoading) {
+    return (
+      <div className="w-[360px] h-[500px] flex items-center justify-center bg-white dark:bg-gray-900">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div>
+      </div>
+    );
+  }
+
+  return (
+    <ErrorBoundary>
+      <div className={`w-[360px] min-h-[500px] flex flex-col bg-white dark:bg-gray-900 ${preferences.darkMode ? 'dark' : ''}`}>
+        <Header 
+          darkMode={preferences.darkMode} 
+          onToggleDarkMode={handleToggleDarkMode} 
+        />
+        
+        <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
+        
+        <main className="flex-1 overflow-auto">
+          {activeTab === 'simulator' && (
+            <div className="p-4 space-y-5">
+              <FilterSelector
+                selectedFilter={filterType}
+                onFilterChange={handleFilterChange}
+              />
+              
+              <FilterToggle
+                isEnabled={isEnabled}
+                filterType={filterType}
+                onToggle={handleToggle}
+              />
+              
+              <SeveritySlider
+                filterType={filterType}
+                severity={severity}
+                onSeverityChange={handleSeverityChange}
+                disabled={!isEnabled}
+              />
+              
+              {/* Quick keyboard shortcut hint */}
+              <div className="text-center text-xs text-gray-400 dark:text-gray-500 pt-2">
+                <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs">
+                  Alt+Shift+C
+                </kbd>
+                {' '}to toggle filter
+              </div>
+            </div>
+          )}
+          
+          {activeTab === 'info' && (
+            <div className="p-4">
+              <FilterInfo 
+                filterType={filterType} 
+                isEnabled={isEnabled} 
+              />
+            </div>
+          )}
+          
+          {activeTab === 'settings' && (
+            <Settings
+              preferences={preferences}
+              onUpdatePreferences={handleUpdatePreferences}
+              onExportData={handleExport}
+              onImportData={handleImport}
+              onClearHistory={handleClearHistory}
+              onResetDefaults={handleResetDefaults}
+            />
+          )}
+        </main>
+        
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          visible={toast.visible}
+          onClose={() => setToast(prev => ({ ...prev, visible: false }))}
+        />
+      </div>
+    </ErrorBoundary>
+  );
+}
+
+export default PopupApp;

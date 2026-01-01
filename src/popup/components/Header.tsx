@@ -1,39 +1,96 @@
 
 interface HeaderProps {
-  onScanPage: () => void
+  darkMode: boolean;
+  onToggleDarkMode: () => void;
 }
 
-export function Header({ onScanPage }: HeaderProps) {
+export function Header({ darkMode, onToggleDarkMode }: HeaderProps) {
   return (
-    <header className="bg-beige dark:bg-warm-brown/20 border-b border-border dark:border-warm-brown/30 px-4 py-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
-            </svg>
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold text-dark dark:text-cream leading-tight">
-              <span className="font-light opacity-70">the</span>
-              <span className="text-primary font-bold">WCAG</span>
-            </h1>
-            <p className="text-xs text-warm-brown dark:text-cream/60">Color Contrast Checker</p>
-          </div>
+    <header className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 dark:from-emerald-700 dark:to-teal-700">
+      <div className="flex items-center gap-2">
+        {/* Logo/Icon */}
+        <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
+          <svg 
+            className="w-5 h-5 text-white" 
+            fill="none" 
+            viewBox="0 0 24 24" 
+            stroke="currentColor"
+          >
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              strokeWidth={2} 
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" 
+            />
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              strokeWidth={2} 
+              d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" 
+            />
+          </svg>
         </div>
         
+        <div>
+          <h1 className="text-white font-semibold text-sm leading-tight">
+            Color Blindness
+          </h1>
+          <p className="text-white/70 text-xs">
+            Simulator
+          </p>
+        </div>
+      </div>
+      
+      <div className="flex items-center gap-2">
+        {/* Dark mode toggle */}
         <button
-          onClick={onScanPage}
-          className="btn-primary text-xs py-1.5 px-3"
-          title="Scan current page for contrast issues"
+          onClick={onToggleDarkMode}
+          className="p-2 text-white/80 hover:text-white hover:bg-white/10 
+                     rounded-lg transition-colors"
+          title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
         >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-          </svg>
-          Scan Page
+          {darkMode ? (
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" 
+              />
+            </svg>
+          ) : (
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" 
+              />
+            </svg>
+          )}
         </button>
+        
+        {/* Info link */}
+        <a
+          href="https://thewcag.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="p-2 text-white/80 hover:text-white hover:bg-white/10 
+                     rounded-lg transition-colors"
+          title="Learn more about color accessibility"
+          aria-label="Learn more about color accessibility"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              strokeWidth={2} 
+              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
+            />
+          </svg>
+        </a>
       </div>
     </header>
-  )
+  );
 }
-

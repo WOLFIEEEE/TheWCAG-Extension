@@ -1,11 +1,11 @@
 {
-  "name": "thewcag-color-contrast-checker",
-  "version": "1.0.1",
-  "description": "Production-grade WCAG color contrast checker with eyedropper, auto-suggestions, and full page scanning",
+  "name": "thewcag-color-blindness-simulator",
+  "version": "1.0.0",
+  "description": "Simulate color blindness to test website accessibility. Preview how users with color vision deficiency see your content.",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/WOLFIEEEE/TheWCAG-Extension.git"
+    "url": "https://github.com/WOLFIEEEE/ColorBlindness-Extension.git"
   },
   "scripts": {
     "dev": "vite",
@@ -16,16 +16,31 @@
     "test:coverage": "vitest --coverage",
     "lint": "eslint src --ext .ts,.tsx",
     "lint:fix": "eslint src --ext .ts,.tsx --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "vitest related --run"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "zod": "^4.3.4",
     "zustand": "^4.5.2"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.0.0-beta.25",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.1",
+    "@testing-library/user-event": "^14.6.1",
     "@types/chrome": "^0.0.268",
+    "@types/jsdom": "^27.0.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
@@ -35,6 +50,9 @@
     "eslint": "^8.57.0",
     "eslint-plugin-react": "^7.34.0",
     "eslint-plugin-react-hooks": "^4.6.0",
+    "husky": "^9.1.7",
+    "jsdom": "^27.4.0",
+    "lint-staged": "^16.2.7",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
     "typescript": "^5.5.2",
@@ -42,4 +60,3 @@
     "vitest": "^1.6.0"
   }
 }
-
