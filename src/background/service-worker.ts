@@ -1,159 +1,249 @@
 /**
- * Background Service Worker
- * Handles communication between popup, content scripts, and devtools
+ * Service Worker for Color Blindness Simulator
+ * 
+ * Handles background tasks, badge updates, keyboard shortcuts,
+ * and tab state management.
  */
 
-import { setPendingEyedropper, clearEyedropperActive } from '@/lib/storage'
+import type { FilterConfig, ColorBlindnessType } from '../lib/colorblind-filters';
+import { 
+  getCurrentFilter, 
+  setCurrentFilter, 
+  getIsEnabled, 
+  setIsEnabled,
+  getPreferences,
+  addToHistory
+} from '../lib/storage';
+import { createLogger } from '../lib/logger';
 
-// Listen for extension install/update
-chrome.runtime.onInstalled.addListener((details) => {
-  console.log('TheWCAG Color Contrast Checker installed/updated:', details.reason)
+const logger = createLogger('ServiceWorker');
+
+// Track active filters per tab
+const tabFilters = new Map<number, { isEnabled: boolean; config: FilterConfig }>();
+
+/**
+ * Update extension badge to show filter status
+ */
+async function updateBadge(tabId: number, isEnabled: boolean, filterType: ColorBlindnessType): Promise<void> {
+  try {
+    if (isEnabled && filterType !== 'normal') {
+      // Show colored dot when filter is active
+      await chrome.action.setBadgeText({ text: '●', tabId });
+      await chrome.action.setBadgeBackgroundColor({ color: '#10b981', tabId }); // Green
+      
+      // Update title to show active filter
+      const filterNames: Record<ColorBlindnessType, string> = {
+        normal: 'Normal',
+        protanopia: 'Protanopia',
+        protanomaly: 'Protanomaly', 
+        deuteranopia: 'Deuteranopia',
+        deuteranomaly: 'Deuteranomaly',
+        tritanopia: 'Tritanopia',
+        tritanomaly: 'Tritanomaly',
+        achromatopsia: 'Achromatopsia',
+        achromatomaly: 'Achromatomaly'
+      };
+      
+      await chrome.action.setTitle({ 
+        title: `Color Blindness Simulator - ${filterNames[filterType]} Active`,
+        tabId 
+      });
+    } else {
+      // Clear badge when filter is off
+      await chrome.action.setBadgeText({ text: '', tabId });
+      await chrome.action.setTitle({ 
+        title: 'TheWCAG Color Blindness Simulator',
+        tabId 
+      });
+    }
+  } catch (error) {
+    logger.error('Error updating badge:', error);
+  }
+}
+
+/**
+ * Apply filter to a specific tab
+ */
+async function applyFilterToTab(tabId: number, config: FilterConfig, enabled: boolean): Promise<void> {
+  try {
+    // Store tab state
+    tabFilters.set(tabId, { isEnabled: enabled, config });
+    
+    // Update badge
+    await updateBadge(tabId, enabled, config.type);
+    
+    // Send message to content script
+    if (enabled && config.type !== 'normal') {
+      await chrome.tabs.sendMessage(tabId, { action: 'applyFilter', config });
+    } else {
+      await chrome.tabs.sendMessage(tabId, { action: 'removeFilter' });
+    }
+    
+    // Save to storage
+    await setCurrentFilter(config);
+    await setIsEnabled(enabled);
+    
+    // Add to history if enabled
+    if (enabled && config.type !== 'normal') {
+      const tab = await chrome.tabs.get(tabId);
+      await addToHistory(config.type, config.severity, tab.url);
+    }
+  } catch (error) {
+    logger.error('Error applying filter to tab:', error);
+  }
+}
+
+/**
+ * Get initial state for a tab
+ */
+async function getInitialState(): Promise<{ isEnabled: boolean; config: FilterConfig }> {
+  const [config, isEnabled] = await Promise.all([
+    getCurrentFilter(),
+    getIsEnabled()
+  ]);
   
-  if (details.reason === 'install') {
-    // Set default preferences on first install
-    chrome.storage.local.set({
-      wcag_preferences: {
-        defaultLevel: 'AA',
-        defaultTextSize: 'normal',
-        darkMode: false,
-        showNotifications: true,
-        maxHistoryItems: 20,
-      },
-      wcag_color_history: [],
-      wcag_saved_palettes: [],
-    })
-  }
-})
+  return { isEnabled, config };
+}
 
-// Handle messages from popup and content scripts
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('Service worker received message:', message, 'from:', sender)
+// Message handler
+chrome.runtime.onMessage.addListener((
+  message: { action: string; [key: string]: unknown },
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: unknown) => void
+) => {
+  const handleMessage = async () => {
+    try {
+      switch (message.action) {
+        case 'getInitialState': {
+          const state = await getInitialState();
+          return state;
+        }
+        
+        case 'applyFilter': {
+          const tabId = sender.tab?.id;
+          if (tabId && message.config) {
+            await applyFilterToTab(tabId, message.config as FilterConfig, true);
+          }
+          return { success: true };
+        }
+        
+        case 'disableFilter': {
+          const tabId = sender.tab?.id;
+          if (tabId) {
+            const state = tabFilters.get(tabId);
+            if (state) {
+              await applyFilterToTab(tabId, state.config, false);
+            }
+          }
+          return { success: true };
+        }
+        
+        case 'toggleFilter': {
+          const tabId = sender.tab?.id;
+          if (tabId) {
+            const state = tabFilters.get(tabId);
+            if (state) {
+              await applyFilterToTab(tabId, state.config, !state.isEnabled);
+              return { success: true, isEnabled: !state.isEnabled };
+            }
+          }
+          return { success: false };
+        }
+        
+        case 'getCurrentState': {
+          const state = await getInitialState();
+          return state;
+        }
+        
+        case 'setFilter': {
+          const config = message.config as FilterConfig;
+          const enabled = message.enabled as boolean;
+          
+          // Get active tab
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (tab?.id) {
+            await applyFilterToTab(tab.id, config, enabled);
+          }
+          return { success: true };
+        }
+        
+        case 'updateSeverity': {
+          const severity = message.severity as number;
+          const currentConfig = await getCurrentFilter();
+          const newConfig = { ...currentConfig, severity };
+          
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (tab?.id) {
+            const state = tabFilters.get(tab.id);
+            await applyFilterToTab(tab.id, newConfig, state?.isEnabled ?? false);
+          }
+          return { success: true };
+        }
 
-  switch (message.type) {
-    case 'GET_TAB_INFO':
-      // Get current tab info
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        sendResponse({ tab: tabs[0] })
-      })
-      return true // Keep channel open for async response
-
-    case 'INJECT_CONTENT_SCRIPT':
-      // Manually inject content script if needed
-      if (sender.tab?.id) {
-        chrome.scripting.executeScript({
-          target: { tabId: sender.tab.id },
-          files: ['src/content/content.ts'],
-        }).then(() => {
-          sendResponse({ success: true })
-        }).catch((error) => {
-          sendResponse({ success: false, error: error.message })
-        })
+        default:
+          return { success: false, error: 'Unknown action' };
       }
-      return true
+    } catch (error) {
+      logger.error('Service worker error:', error);
+      return { success: false, error: String(error) };
+    }
+  };
+  
+  handleMessage().then(sendResponse);
+  return true; // Keep message channel open
+});
 
-    case 'COLOR_PICKED':
-      // Store picked color in storage for popup to retrieve
-      setPendingEyedropper(message.color, message.colorType)
-        .then(() => {
-          // Clear the active eyedropper state
-          clearEyedropperActive()
-          
-          // Set badge to indicate color was picked
-          chrome.action.setBadgeText({ text: '●' })
-          chrome.action.setBadgeBackgroundColor({ color: message.color })
-          
-          // Clear badge after 5 seconds
-          setTimeout(() => {
-            chrome.action.setBadgeText({ text: '' })
-          }, 5000)
-        })
-        .catch((error) => {
-          console.error('Error storing picked color:', error)
-        })
-      sendResponse({ success: true })
-      break
-
-    case 'SCAN_RESULTS':
-      // Store scan results for devtools panel
-      chrome.storage.local.set({
-        wcag_last_scan: {
-          url: message.url,
-          timestamp: Date.now(),
-          results: message.results,
-        },
-      })
-      break
-
-    case 'OPEN_POPUP':
-      // Can't programmatically open popup, but can badge the icon
-      chrome.action.setBadgeText({ text: '!' })
-      chrome.action.setBadgeBackgroundColor({ color: '#D97706' })
-      setTimeout(() => {
-        chrome.action.setBadgeText({ text: '' })
-      }, 3000)
-      break
-
-    default:
-      console.log('Unknown message type:', message.type)
+// Handle keyboard shortcut
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'toggle-filter') {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id) {
+        const state = tabFilters.get(tab.id);
+        const currentConfig = state?.config || await getCurrentFilter();
+        const isCurrentlyEnabled = state?.isEnabled ?? false;
+        
+        await applyFilterToTab(tab.id, currentConfig, !isCurrentlyEnabled);
+      }
+    } catch (error) {
+      logger.error('Error handling keyboard shortcut:', error);
+    }
   }
-})
+});
 
-// Handle keyboard shortcuts
-chrome.commands?.onCommand?.addListener((command) => {
-  console.log('Command received:', command)
+// Clean up when tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  tabFilters.delete(tabId);
+});
 
-  switch (command) {
-    case 'toggle-eyedropper':
-      // Send message to content script to toggle eyedropper
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_EYEDROPPER' })
-        }
-      })
-      break
-
-    case 'scan-page':
-      // Send message to content script to scan page
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, { type: 'SCAN_PAGE' })
-        }
-      })
-      break
+// Restore filter when tab is updated (page reload)
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.status === 'complete') {
+    const state = tabFilters.get(tabId);
+    const prefs = await getPreferences();
+    
+    if (state && state.isEnabled && prefs.autoApplyOnLoad) {
+      // Re-apply filter after page load
+      try {
+        await chrome.tabs.sendMessage(tabId, { 
+          action: 'applyFilter', 
+          config: state.config 
+        });
+      } catch {
+        // Content script may not be ready yet
+        logger.debug('Waiting for content script to load');
+      }
+    }
   }
-})
+});
 
-// Context menu for right-click options
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus?.create({
-    id: 'wcag-check-element',
-    title: 'Check contrast of this element',
-    contexts: ['all'],
-  })
-
-  chrome.contextMenus?.create({
-    id: 'wcag-scan-page',
-    title: 'Scan page for contrast issues',
-    contexts: ['page'],
-  })
-})
-
-chrome.contextMenus?.onClicked?.addListener((info, tab) => {
-  if (!tab?.id) return
-
-  switch (info.menuItemId) {
-    case 'wcag-check-element':
-      // Note: pageX/pageY not available in manifest v3, user will use eyedropper instead
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'TOGGLE_EYEDROPPER',
-      })
-      break
-
-    case 'wcag-scan-page':
-      chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' })
-      break
+// Initialize on install/update
+chrome.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason === 'install') {
+    logger.info('Color Blindness Simulator installed');
+  } else if (details.reason === 'update') {
+    logger.info('Color Blindness Simulator updated');
   }
-})
+});
 
-export {}
-
+logger.info('Color Blindness Simulator service worker initialized');

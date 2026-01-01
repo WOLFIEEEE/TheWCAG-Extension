@@ -1,10 +1,10 @@
-# Privacy Policy for TheWCAG Color Contrast Checker
+# Privacy Policy for TheWCAG Color Blindness Simulator
 
-**Last Updated:** December 22, 2024
+**Last Updated:** January 2025
 
 ## Overview
 
-TheWCAG Color Contrast Checker ("the Extension") is committed to protecting your privacy. This privacy policy explains how the Extension handles your data.
+TheWCAG Color Blindness Simulator ("the Extension") is committed to protecting your privacy. This privacy policy explains how the Extension handles your data.
 
 ## Data Collection
 
@@ -12,9 +12,10 @@ TheWCAG Color Contrast Checker ("the Extension") is committed to protecting your
 
 The Extension collects and stores the following data **locally on your device only**:
 
-1. **Color History**: The colors you check for contrast are saved to help you reuse them later
-2. **User Preferences**: Your settings such as dark mode preference, default WCAG level, and text size
-3. **Pending Eyedropper State**: Temporary storage of colors picked using the eyedropper tool
+1. **Filter Preferences**: Your preferred color blindness filter type and severity settings
+2. **User Settings**: Preferences such as dark mode, auto-apply on load, and notification settings
+3. **Filter History**: Recently used filter configurations (optional)
+4. **Per-site Settings**: If enabled, filter preferences for specific websites
 
 ### What We Do NOT Collect
 
@@ -24,6 +25,7 @@ The Extension collects and stores the following data **locally on your device on
 - **No Remote Servers**: All data stays on your device; we do not send data to any external servers
 - **No Browsing History**: We do not access or store your browsing history
 - **No Cookies**: We do not use cookies or tracking technologies
+- **No Page Content**: We do not read, store, or transmit any webpage content
 
 ## Data Storage
 
@@ -32,7 +34,7 @@ All data is stored using Chrome's `storage.local` API, which means:
 - Data is stored locally on your computer
 - Data is encrypted by Chrome
 - Data is never transmitted over the network
-- Data can be cleared at any time by you through the extension's Settings panel
+- Data can be cleared at any time through the extension's Settings panel
 
 ## Permissions Explained
 
@@ -40,38 +42,39 @@ The Extension requests the following permissions:
 
 | Permission | Why We Need It |
 |------------|----------------|
-| `activeTab` | To analyze colors on the current webpage when you use the eyedropper or page scanner |
-| `storage` | To save your color history and preferences locally on your device |
-| `scripting` | To inject the color picker and scanner tools into webpages |
-| `host_permissions: <all_urls>` | To allow the eyedropper and scanner to work on any website you visit |
+| `activeTab` | To apply color blindness filters to the current webpage when you enable simulation |
+| `storage` | To save your filter preferences and settings locally on your device |
+| `scripting` | To inject the color filter into webpages when you activate simulation |
+| `host_permissions: <all_urls>` | To allow the simulator to work on any website you visit |
 
 ### Why "All URLs" Permission?
 
 The `<all_urls>` host permission is required because:
 
-1. **Eyedropper Tool**: Needs to capture colors from any webpage you're viewing
-2. **Page Scanner**: Needs to analyze text/background combinations on any webpage
-3. **Content Script**: Needs to run on any webpage to provide these features
+1. **Filter Application**: Needs to inject SVG filters and apply CSS to simulate color blindness
+2. **Content Script**: Needs to run on any webpage to provide the simulation feature
 
 **Important**: Even with this permission, the Extension:
-- Only activates when YOU click the eyedropper or scan button
+- Only activates when YOU enable the filter
 - Does not automatically read or store any webpage content
 - Does not track which websites you visit
+- Only modifies how colors are displayed (visual effect only)
 
 ## Data Retention
 
-- **Color History**: Retained until you clear it manually in Settings
 - **Preferences**: Retained until you reset them or uninstall the extension
-- **Temporary Data**: Eyedropper state is cleared after use
+- **Filter History**: Retained until you clear it manually in Settings
+- **Per-site Settings**: Retained until you remove them or uninstall
 
 ## Your Rights
 
 You have full control over your data:
 
-1. **View Data**: See your saved colors and preferences in the extension
+1. **View Settings**: See your preferences in the Settings tab
 2. **Export Data**: Export all data as JSON through Settings
-3. **Delete Data**: Clear all history through Settings
-4. **Uninstall**: Removing the extension deletes all associated data
+3. **Clear History**: Clear filter history through Settings
+4. **Reset Defaults**: Reset all settings to defaults
+5. **Uninstall**: Removing the extension deletes all associated data
 
 ## Security
 
@@ -92,9 +95,8 @@ We may update this privacy policy from time to time. Any changes will be reflect
 If you have questions about this privacy policy or the Extension, please:
 
 - Visit: [https://thewcag.com](https://thewcag.com)
-- GitHub Issues: [https://github.com/WOLFIEEEE/TheWCAG-Extension/issues](https://github.com/WOLFIEEEE/TheWCAG-Extension/issues)
+- GitHub Issues: [https://github.com/WOLFIEEEE/ColorBlindness-Extension/issues](https://github.com/WOLFIEEEE/ColorBlindness-Extension/issues)
 
 ---
 
-**Summary**: TheWCAG Color Contrast Checker stores all data locally on your device, does not collect personal information, does not use analytics or tracking, and does not share any data with third parties.
-
+**Summary**: TheWCAG Color Blindness Simulator stores all data locally on your device, does not collect personal information, does not use analytics or tracking, and does not share any data with third parties.
